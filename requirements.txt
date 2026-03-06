@@ -1,0 +1,9 @@
+streamlit
+pandas
+requests
+beautifulsoup4
+scikit-learn
+jieba
+bcrypt
+numpy
+urllib3
