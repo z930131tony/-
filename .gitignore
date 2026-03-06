@@ -1,0 +1,5 @@
+*.db
+__pycache__/
+.streamlit/
+activities_data.csv
+.env
