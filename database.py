@@ -5,16 +5,15 @@ import bcrypt
 DB_NAME = "stust_recommendation.db"
 
 def get_connection():
-    """建立並回傳資料庫連線"""
-    # 加入 check_same_thread=False 防止 Streamlit 在多執行緒下報錯
+    """建立並回傳資料庫連線設定防止多執行緒存取衝突"""
     return sqlite3.connect(DB_NAME, check_same_thread=False)
 
 def init_db():
-    """初始化資料庫與資料表"""
+    """初始化資料庫與建立所需之資料表結構"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 建立使用者表 (Users)
+    # 建立使用者資料表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             student_id TEXT PRIMARY KEY,
@@ -25,8 +24,7 @@ def init_db():
         )
     ''')
     
-    # 建立活動表 (Activities)
-    # 使用 link 作為 UNIQUE，避免爬蟲重複寫入相同的活動
+    # 建立活動資料表並設定連結欄位為唯一值避免重複寫入
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +37,7 @@ def init_db():
         )
     ''')
 
-    # 建立使用者互動紀錄表 (user_interactions)
+    # 建立使用者互動歷史紀錄表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_interactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,26 +52,26 @@ def init_db():
     conn.close()
 
 def hash_password(password):
-    """將密碼加密 (使用 bcrypt)"""
+    """執行密碼雜湊加密運算"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def check_password(password, hashed):
-    """檢查密碼是否與資料庫中的雜湊值符合"""
+    """驗證輸入密碼與資料庫中雜湊值是否吻合"""
     try:
         return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
     except ValueError:
-        # 防呆：避免資料庫裡殘留未加密的明文密碼導致程式崩潰
+        # 處理資料庫殘留明文密碼所導致的例外狀況
         return False
 
 def seed_mock_users():
-    """寫入模擬的使用者資料 (如果資料庫是空的)"""
+    """於資料庫為空時寫入系統預設之測試帳號資料"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 檢查是否已經有使用者
+    # 檢查使用者資料表是否已有紀錄
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
-        # 🚨 修復：寫入資料庫前，將密碼全部經過 bcrypt 雜湊處理
+        # 將測試帳號的密碼全數經過雜湊加密處理後再行寫入
         mock_users = [
             ("4B1G0000", hash_password("123"), "食品系", "大三", "王老吉"),
             ("4B1G0078", hash_password("123"), "資工系", "大四", "謝宇翔"),
@@ -88,11 +86,11 @@ def seed_mock_users():
     conn.close()
 
 def verify_user(student_id, password):
-    """(統一版) 驗證登入並回傳使用者資訊"""
+    """執行登入驗證程序並回傳符合之使用者資訊"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 🚨 修復：不能直接用 AND password = ? 查，必須先撈出雜湊密碼再比對
+    # 提取特定學號之使用者紀錄以進行後續密碼比對
     cursor.execute('''
         SELECT student_id, password, dept, year, name 
         FROM users WHERE student_id = ?
@@ -101,18 +99,17 @@ def verify_user(student_id, password):
     row = cursor.fetchone()
     conn.close()
     
-    # row[1] 是資料庫裡的雜湊密碼
+    # 比對輸入明文與資料庫儲存之雜湊密碼
     if row and check_password(password, row[1]):
         return {"student_id": row[0], "dept": row[2], "year": row[3], "name": row[4]}
     return None
 
 def verify_local_user(username, password):
-    """本地備援驗證：當學校斷網時使用"""
-    # 因為邏輯一樣，直接呼叫修復後的 verify_user 即可
+    """執行離線模式之本地端登入驗證"""
     return verify_user(username, password)
 
 def sync_user_to_db(username, password, info):
-    """登入成功後，將最新資訊與加密後的密碼同步回本地 SQLite"""
+    """將登入成功之使用者資訊與加密密碼同步儲存至本地資料庫"""
     conn = get_connection()
     cursor = conn.cursor()
     hashed_pwd = hash_password(password)
@@ -126,7 +123,7 @@ def sync_user_to_db(username, password, info):
     conn.close()
 
 def save_activities_to_db(activities_list):
-    """將爬蟲抓到的活動寫入資料庫"""
+    """將爬蟲取得之活動資料批次寫入資料庫"""
     if not activities_list: return
     
     conn = get_connection()
@@ -145,14 +142,14 @@ def save_activities_to_db(activities_list):
     conn.close()
 
 def get_all_activities_df():
-    """從資料庫讀取所有活動，並轉為 Pandas DataFrame 供推薦系統使用"""
+    """提取資料庫內所有活動紀錄並轉換為資料框架格式供系統存取"""
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM activities", conn)
     conn.close()
     return df
 
 def log_interaction(student_id, activity_link, interaction_type="click"):
-    """紀錄使用者點擊活動的行為"""
+    """將使用者與系統互動之行為紀錄存入資料庫"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -163,7 +160,7 @@ def log_interaction(student_id, activity_link, interaction_type="click"):
     conn.close()
 
 def get_user_clicked_activities(student_id):
-    """獲取使用者點擊過的活動連結清單"""
+    """查詢特定使用者曾點擊瀏覽過之活動連結清單"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
