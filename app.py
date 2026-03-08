@@ -20,7 +20,7 @@ def fetch_live_data():
     """呼叫外部模組進行即時抓取"""
     try:
         # 直接呼叫外部抓取函數
-        data_list = scraper.scrape_stust_dept_aware()
+        data_list = scraper.fetch_all_sources()
         
         if data_list:
             # 將爬取到的資料寫入資料庫
@@ -591,4 +591,5 @@ else:
             
         render_google_pagination(rec_total_pages, "recommend_page")
     else:
+
         st.warning(" 資料庫為空，請確認後端爬蟲狀態。")
