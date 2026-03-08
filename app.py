@@ -9,18 +9,19 @@ import jieba
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import streamlit.components.v1 as components
 
 database.init_db()
 database.seed_mock_users()
 
 # 資料讀取層
 
-@st.cache_data(ttl=1800, show_spinner=" 正在連線學校網站抓取最新活動...")
-def fetch_live_data():
+@st.cache_data(ttl=1800,show_spinner=False)  # 快取資料30分鐘，避免頻繁爬取
+def fetch_live_data(): 
     """呼叫外部模組進行即時抓取"""
     try:
         # 直接呼叫外部抓取函數
-        data_list = scraper.fetch_all_sources()
+        data_list = scraper.scrape_stust_dept_aware()
         
         if data_list:
             # 將爬取到的資料寫入資料庫
@@ -34,10 +35,58 @@ def fetch_live_data():
         return pd.DataFrame()
 
 def load_data():
-    """整合資料讀取與清洗"""
+    """整合資料讀取與清洗，並顯示客製化南臺小知識載入畫面"""
+
+    # 建立一個佔位符，用來放南臺冷知識
+    placeholder = st.empty()
+    
+    # 撰寫 HTML 與 JavaScript，讓瀏覽器自己每 10 秒換一句話，完美避開 Python 卡住的問題
+    html_code = """
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 25px; background-color: #E8F0FE; border-radius: 12px; border: 1px solid #D2E3FC;">
+        <h3 style="color: #1967D2; margin-top: 0;">⏳ 正在連線學校網站抓取最新活動...</h3>
+        <p style="color: #3C4043; font-size: 16px; margin-bottom: 0;">
+            💡 <b>南臺冷知識：</b> <span id="fact-text">載入中...</span>
+        </p>
+    </div>
+    <script>
+        const facts = [
+            "南臺科大創立於 1969 年，前身為「南台工業技藝專科學校」。",
+            "南臺科大校訓為「信義誠實」。",
+            "磅礴館的外觀設計靈感來自於「巨輪」，象徵乘風破浪、航向未來。",
+            "校園內的天鵝池不僅是地標，更是許多南臺人共同的回憶與約會聖地。",
+            "南臺科大圖書館館藏豐富，是南部私立科大中資源最充沛的圖書館之一。",
+            "每年的校慶活動與迎新演唱會，都會在具代表性的「三連堂」盛大舉辦。",
+            "南臺科大校地面積約 16.46 公頃，是一所充滿活力的綠色校園。",
+            "南臺科大在各項產學合作與創新創業競賽中，常年名列全國私立科大前茅。"
+        ];
+        
+        // 每次載入先隨機挑選一句
+        let currentIndex = Math.floor(Math.random() * facts.length);
+        document.getElementById("fact-text").innerText = facts[currentIndex];
+
+        // 每 10 秒 (10000 毫秒) 隨機換一句
+        setInterval(function() {
+            let nextIndex;
+            do {
+                nextIndex = Math.floor(Math.random() * facts.length);
+            } while (nextIndex === currentIndex); // 確保不會連續抽到同一句
+            
+            currentIndex = nextIndex;
+            document.getElementById("fact-text").innerText = facts[currentIndex];
+        }, 10000);
+    </script>
+    """
+    # 設定 height 130 避免佔用太大空間
+    with placeholder:
+        components.html(html_code, height=130)
+
     # 呼叫快取函數
     df = fetch_live_data()
-    
+
+    # 爬蟲結束後，把佔位符(冷知識畫面)清空
+    placeholder.empty()
+
+
     if df.empty:
         df = database.get_all_activities_df()
         if df.empty:
@@ -591,5 +640,4 @@ else:
             
         render_google_pagination(rec_total_pages, "recommend_page")
     else:
-
         st.warning(" 資料庫為空，請確認後端爬蟲狀態。")
