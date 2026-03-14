@@ -328,7 +328,7 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 """
                 
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-pro')
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     response = model.generate_content(system_prompt + "\n學生問：" + prompt)
                     ai_reply = response.text
                 except Exception as e:
