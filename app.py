@@ -13,15 +13,8 @@ import streamlit.components.v1 as components
 import joblib
 from sentence_transformers import SentenceTransformer, util
 import torch
-import google.generativeai as genai
 
-# 🔐 專業做法：從 Streamlit 的安全保險箱讀取 API Key
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=api_key)
-except Exception as e:
-    # 如果找不到 API Key，系統依然能正常開啟，只是 AI 對話框可能會報錯
-    st.warning("⚠️ 找不到 API Key！請確認已設定 .streamlit/secrets.toml 或 Streamlit Cloud Secrets。")
+# ⚠️ 注意：這裡最上方不需要再設定任何 API Key，我們把它搬到需要用的時候再讀取！
 
 database.init_db()
 database.seed_mock_users()
@@ -31,7 +24,6 @@ database.seed_mock_users()
 # ==========================================
 @st.cache_data(ttl=1800,show_spinner=False)
 def fetch_live_data(): 
-    """呼叫外部模組進行即時抓取"""
     try:
         data_list = scraper.scrape_stust_dept_aware()
         if data_list:
@@ -45,13 +37,10 @@ def fetch_live_data():
 
 @st.cache_resource(show_spinner="🧠 正在載入 AI 語意大腦，初次啟動請稍候...")
 def load_semantic_model():
-    """載入支援多國語言與中文的輕量級語意向量模型"""
     return SentenceTransformer('shibing624/text2vec-base-chinese')
 
 def load_data():
-    """整合資料讀取與清洗，並顯示客製化南臺小知識載入畫面"""
     placeholder = st.empty()
-    
     html_code = """
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 25px; background-color: #E8F0FE; border-radius: 12px; border: 1px solid #D2E3FC;">
         <h3 style="color: #1967D2; margin-top: 0;">⏳ 正在連線學校網站抓取最新活動...</h3>
@@ -64,11 +53,7 @@ def load_data():
             "南臺科大創立於 1969 年，前身為「南台工業技藝專科學校」。",
             "南臺科大校訓為「信義誠實」。",
             "磅礴館的外觀設計靈感來自於「巨輪」，象徵乘風破浪、航向未來。",
-            "校園內的天鵝池不僅是地標，更是許多南臺人共同的回憶與約會聖地。",
-            "南臺科大圖書館館藏豐富，是南部私立科大中資源最充沛的圖書館之一。",
-            "每年的校慶活動與迎新演唱會，都會在具代表性的「三連堂」盛大舉辦。",
-            "南臺科大校地面積約 16.46 公頃，是一所充滿活力的綠色校園。",
-            "南臺科大在各項產學合作與創新創業競賽中，常年名列全國私立科大前茅。"
+            "校園內的天鵝池不僅是地標，更是許多南臺人共同的回憶與約會聖地。"
         ];
         let currentIndex = Math.floor(Math.random() * facts.length);
         document.getElementById("fact-text").innerText = facts[currentIndex];
@@ -93,8 +78,6 @@ def load_data():
         if df.empty:
             st.error(" 無法抓取資料且資料庫為空。")
             return pd.DataFrame()
-        else:
-            st.warning(" 即時抓取失敗，顯示資料庫歷史備份資料。")
 
     try:
         df['tags'] = df['tags'].fillna("一般").apply(lambda x: str(x).split(" ") if isinstance(x, str) else x)
@@ -103,7 +86,6 @@ def load_data():
             df.sort_values(by="date", ascending=False, inplace=True)
         return df
     except Exception as e:
-        st.error(f"資料清洗錯誤: {e}")
         return pd.DataFrame()
 
 # ==========================================
@@ -119,16 +101,12 @@ def enrich_activity_tags(df):
         "半導體": ["半導體", "製程", "晶片", "電性"],
         "競賽": ["競賽", "比賽", "黑客松", "挑戰賽"]
     }
-    
     def extract_tags(title, existing_tags):
         tags = set(existing_tags) if isinstance(existing_tags, list) else set([existing_tags])
-        if "一般" in tags and len(tags) == 1:
-            tags.remove("一般")
+        if "一般" in tags and len(tags) == 1: tags.remove("一般")
         for tag, keywords in tag_rules.items():
-            if any(kw.lower() in str(title).lower() for kw in keywords):
-                tags.add(tag)
-        if not tags:
-            tags.add("校園公告")
+            if any(kw.lower() in str(title).lower() for kw in keywords): tags.add(tag)
+        if not tags: tags.add("校園公告")
         return list(tags)
 
     df['tags'] = df.apply(lambda row: extract_tags(row['title'], row['tags']), axis=1)
@@ -145,21 +123,16 @@ def get_user_profile_tags(department, past_courses, user_year=""):
         "應英": ["雙語", "EMI", "外語", "英文", "國際"]
     }
     for key, tags in dept_tag_map.items():
-        if key in department:
-            user_tags.update(tags)
+        if key in department: user_tags.update(tags)
             
     course_tag_map = {
         ("程式", "python", "java"): "軟體服務",
         ("ai", "人工智慧"): "AI",
         ("安全", "密碼"): "資安漏洞預警", 
-        ("行銷", "社群"): "商業同業",
-        ("設計", "色彩"): "文化部",
-        ("物理", "微積分"): "半導體",
     }
     for course in past_courses:
         for keywords, tag in course_tag_map.items():
-            if any(kw.lower() in course.lower() for kw in keywords):
-                user_tags.add(tag)
+            if any(kw.lower() in course.lower() for kw in keywords): user_tags.add(tag)
                 
     if any(y in user_year for y in ["三", "四", "碩"]):
         user_tags.update(["實習", "徵才", "招募", "專任助理", "就業", "企業", "職缺"])
@@ -171,7 +144,6 @@ def get_user_profile_tags(department, past_courses, user_year=""):
 
 def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_year=""):
     if activities_df.empty: return activities_df
-
     df = activities_df.copy()
     df['score'] = 0.0
     df['match_reason'] = ""
@@ -181,16 +153,12 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
         ctr_model = joblib.load("ctr_model.pkl")
     
     df['content'] = df['title'] + " " + df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)) + " " + df['dept_target']
-    
     clicked_links = database.get_user_clicked_activities(user_id)
     clicked_titles = df[df['link'].isin(clicked_links)]['title'].tolist()
-    
     user_profile_text = f"{user_dept} {user_year} " + " ".join(user_tags) + " " + " ".join(clicked_titles)
     all_documents = [user_profile_text] + df['content'].tolist()
     
-    def jieba_tokenizer(text):
-        return jieba.lcut(text)
-        
+    def jieba_tokenizer(text): return jieba.lcut(text)
     vectorizer = TfidfVectorizer(tokenizer=jieba_tokenizer, token_pattern=None)
     try:
         tfidf_matrix = vectorizer.fit_transform(all_documents)
@@ -203,27 +171,23 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
         reasons = []
         target_dept = str(row['dept_target'])
         
-        if target_dept == "全校":
-            rule_score += 1
+        if target_dept == "全校": rule_score += 1
         elif user_dept in target_dept or target_dept in user_dept:
             rule_score += 10
             reasons.append(f"👑 {user_dept} 專屬")
             
         activity_tags = set(row['tags']) if isinstance(row['tags'], list) else set()
         overlap = user_tags.intersection(activity_tags)
-        if overlap:
-            rule_score += len(overlap) * 2
+        if overlap: rule_score += len(overlap) * 2
             
         if any(y in user_year for y in ["三", "四", "碩"]):
             activity_text = str(row['tags']) + str(row['title'])
-            if any(kw in activity_text for kw in ["實習", "徵才", "就業", "招募", "企業", "職缺"]):
+            if any(kw in activity_text for kw in ["實習", "徵才", "就業"]):
                 rule_score += 15 
                 reasons.append("💼 就業實習推薦")
                 
         ml_score = cosine_sim[i] * 15 
-        if ml_score > 1.5 or overlap:
-             reasons.append("🤖 AI 語意推薦")
-            
+        if ml_score > 1.5 or overlap: reasons.append("🤖 AI 語意推薦")
         if row['link'] in clicked_links:
             rule_score -= 3
             reasons.append("👀 您已查看")
@@ -233,18 +197,14 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
             dept_match = 1 if (user_dept in target_dept or target_dept == "全校") else 0
             overlap_count = len(overlap)
             is_senior = 1 if any(y in user_year for y in ["三", "四", "碩"]) else 0
-            is_internship = 1 if any(kw in str(row['tags']) for kw in ["實習", "徵才", "就業"]) else 0
+            is_internship = 1 if any(kw in str(row['tags']) for kw in ["實習", "徵才"]) else 0
 
             features = [[dept_match, overlap_count, is_senior * is_internship]]
             proba_result = ctr_model.predict_proba(features)[0]
-            if len(proba_result) > 1:
-                click_prob = proba_result[1]
-            else:
-                click_prob = 1.0 if ctr_model.classes_[0] == 1 else 0.0
+            click_prob = proba_result[1] if len(proba_result) > 1 else (1.0 if ctr_model.classes_[0] == 1 else 0.0)
 
             predict_score = click_prob * 20
-            if click_prob > 0.6:
-                reasons.append("🎯 AI 點擊率預測極高")
+            if click_prob > 0.6: reasons.append("🎯 AI 點擊率預測極高")
 
         df.at[index, 'score'] = rule_score + ml_score + predict_score
         
@@ -260,27 +220,20 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
 # 3. Agentic RAG 與技能 (Skill) 定義
 # ==========================================
 def skill_auto_register(student_id, activity_title):
-    """這是一個 Skill：模擬 AI 自動幫學生報名活動，並寫入資料庫"""
-    time.sleep(1.5) # 模擬網路延遲與報名處理
+    time.sleep(1.5) 
     return f"✅ 技能執行成功：已成功為學號 {student_id} 報名【{activity_title}】！已同步至校務系統。"
 
 def render_agentic_rag_chat(user_info, recommended_df):
-    """繪製具有檢索與行動能力的 AI 聊天室"""
     st.title("🤖 校園 AI 導覽員 (Agentic RAG)")
     st.info("我不只會用語意搜尋推薦活動，只要跟我說一聲，我還能啟動【Skill】直接幫你報名喔！")
     
-    # 初始化對話紀錄與技能狀態
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "pending_skill_activity" not in st.session_state:
-        st.session_state.pending_skill_activity = None
+    if "messages" not in st.session_state: st.session_state.messages = []
+    if "pending_skill_activity" not in st.session_state: st.session_state.pending_skill_activity = None
 
-    # 顯示歷史對話
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # --- 技能觸發確認介面 (Persistent UI) ---
     if st.session_state.pending_skill_activity:
         st.divider()
         st.markdown("#### 🛠️ AI 請求授權執行技能：代客報名")
@@ -293,7 +246,6 @@ def render_agentic_rag_chat(user_info, recommended_df):
                     skill_result = skill_auto_register(user_info.get('student_id', 'Unknown'), target_act)
                     st.success(skill_result)
                     st.balloons()
-                    # 執行完畢後重置狀態
                     st.session_state.pending_skill_activity = None
                     time.sleep(2)
                     st.rerun()
@@ -303,29 +255,23 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 st.rerun()
         st.divider()
 
-    # 接收使用者聊天輸入
     if prompt := st.chat_input("例如：我想找跟程式有關的活動，並幫我報名第一個！"):
-        # 1. 顯示並儲存使用者的問題
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        with st.chat_message("user"): st.markdown(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        # 2. 檢索與生成回覆
         with st.chat_message("assistant"):
-            with st.spinner("🧠 思考中，並檢索南臺活動庫..."):
-                # RAG 檢索 (Retrieval)：抓取分數最高的前 3 筆活動
+            with st.spinner("🧠 思考中，並連線至 Groq Llama-3 大腦..."):
                 top_3 = recommended_df.head(3) if not recommended_df.empty else pd.DataFrame()
                 context_str = ""
                 for idx, row in top_3.iterrows():
                     context_str += f"- 活動：{row['title']}, 標籤：{row['tags']}\n"
                 
-                # RAG 生成 (Generation)：組合 Prompt 呼叫 LLM
                 system_prompt = f"""
                 你現在扮演南臺科大最罩、最熱心的學長/學姊。
                 來找你諮詢的是 {user_info['dept']} 的 {user_info['name']}。
                 
                 【絕對遵守的規則】
-                1. 說話語氣要自然、活潑，像大學生平常傳 LINE 聊天一樣，絕對不要像死板的客服機器人。
+                1. 說話語氣要自然、活潑，像大學生平常傳 LINE 聊天一樣，絕對不要像死板的客服機器人，請使用繁體中文。
                 2. 你【只能】根據以下的 [最新活動清單] 來回答問題，絕對不可以自己憑空捏造活動！
                 3. 如果學生問的問題，在清單中找不到相關活動，請誠實跟他說「目前沒看到相關的耶」，然後順勢推薦清單裡的其他活動。
                 4. 如果學生明確表示想要報名，請在回答的最後加上一句：「沒問題，我馬上幫你處理報名！」
@@ -335,21 +281,34 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 """
                 
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-flash')
-                    response = model.generate_content(system_prompt + "\n學生問：" + prompt)
-                    ai_reply = response.text
+                    # 🌟 這裡是最乾淨的寫法，保證絕對不會出現 not defined 的錯誤！
+                    api_key = st.secrets["GROQ_API_KEY"]
+                    from groq import Groq
+                    
+                    # 在這裡即時建立專屬的 client
+                    local_groq_client = Groq(api_key=api_key)
+                    
+                    response = local_groq_client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.7, 
+                    )
+                    ai_reply = response.choices[0].message.content
+                except KeyError:
+                    ai_reply = "⚠️ 找不到 GROQ API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GROQ_API_KEY = \"你的金鑰\"`。"
                 except Exception as e:
-                    ai_reply = f"抱歉，我的大腦連線異常，請確認 API Key 是否設定正確：{e}"
+                    ai_reply = f"抱歉，大腦連線異常：{e}"
 
-                # 顯示 AI 回答
                 st.markdown(ai_reply)
                 st.session_state.messages.append({"role": "assistant", "content": ai_reply})
 
-                # Skill 意圖觸發判斷
-                if any(keyword in prompt for keyword in ["報名", "參加", "加一", "+1", "報這個"]):
+                if any(kw in prompt for kw in ["報名", "參加", "加一", "+1", "報這個"]) and not any(neg in prompt for neg in ["不想", "不要", "沒興趣"]):
                     target = top_3.iloc[0]['title'] if not top_3.empty else "未知活動"
                     st.session_state.pending_skill_activity = target
-                    st.rerun() # 重新整理以顯示上方的技能確認按鈕
+                    st.rerun() 
 
 # ==========================================
 # 4. 模擬使用者資料庫 (帳號管理)
@@ -528,7 +487,6 @@ else:
         st.session_state['logged_in'] = False
         st.rerun()
 
-    # 🌟 核心選單新增 AI 導覽員
     menu = st.sidebar.radio("功能選單", ["活動推薦", "🤖 AI 導覽員", "我的點擊紀錄"])
 
     if user.get('student_id') == 'admin' or user.get('name') == '管理員':
@@ -543,7 +501,6 @@ else:
             st.dataframe(pd.read_sql_query("SELECT * FROM user_interactions", conn), use_container_width=True)
             conn.close()
 
-    # 🌟 資料統一在這裡載入，供所有分頁共用 (解決歷史紀錄底下出現推薦卡片的 Bug)
     df_activities = load_data()
     recommended_df = pd.DataFrame()
     
@@ -556,7 +513,6 @@ else:
 
     st.divider()
     
-    # --- 根據選單顯示對應畫面 ---
     if menu == "活動推薦":
         st.sidebar.divider()
         st.sidebar.markdown("### 🔍 活動篩選器")
@@ -610,12 +566,10 @@ else:
             st.warning(" 資料庫為空，請確認後端爬蟲狀態。")
 
     elif menu == "🤖 AI 導覽員":
-        # 呼叫 Agentic RAG 模組
         if not recommended_df.empty:
             render_agentic_rag_chat(user, recommended_df)
         else:
             st.warning("目前沒有活動資料，AI 導覽員無法為您服務。")
 
     elif menu == "我的點擊紀錄":
-        # 顯示歷史紀錄分頁 (乾淨無重疊)
         show_history_page(current_user_id)
