@@ -2,8 +2,10 @@ streamlit
 pandas
 requests
 beautifulsoup4
-scikit-learn
 jieba
-bcrypt
+scikit-learn
 numpy
-urllib3
+joblib
+sentence-transformers
+torch
+google-generativeai
