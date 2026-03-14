@@ -8,4 +8,4 @@ numpy
 joblib
 sentence-transformers
 torch
-google-generativeai
+groq
