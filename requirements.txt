@@ -9,3 +9,4 @@ joblib
 sentence-transformers
 torch
 groq
+bcrypt
