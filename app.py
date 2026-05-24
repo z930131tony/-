@@ -14,7 +14,9 @@ import joblib
 from sentence_transformers import SentenceTransformer, util
 import torch
 
-# ⚠️ 注意：這裡最上方不需要再設定任何 API Key，我們把它搬到需要用的時候再讀取！
+
+if os.path.exists("stust_recommendation.db"):
+    os.remove("stust_recommendation.db")
 
 database.init_db()
 database.seed_mock_users()
