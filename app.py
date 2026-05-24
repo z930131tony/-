@@ -15,9 +15,6 @@ from sentence_transformers import SentenceTransformer, util
 import torch
 
 
-if os.path.exists("stust_recommendation.db"):
-    os.remove("stust_recommendation.db")
-
 database.init_db()
 database.seed_mock_users()
 
