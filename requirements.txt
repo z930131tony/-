@@ -8,5 +8,5 @@ numpy
 joblib
 sentence-transformers
 torch
-groq
 bcrypt
+google-generativeai
