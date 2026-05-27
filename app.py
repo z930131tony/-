@@ -259,7 +259,7 @@ def render_agentic_rag_chat(user_info, recommended_df):
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         with st.chat_message("assistant"):
-            with st.spinner("🧠 思考中，並連線至 Groq Llama-3 大腦..."):
+            with st.spinner("🧠 思考中，並連線至大腦..."):
                 top_3 = recommended_df.head(3) if not recommended_df.empty else pd.DataFrame()
                 context_str = ""
                 for idx, row in top_3.iterrows():
@@ -288,7 +288,7 @@ def render_agentic_rag_chat(user_info, recommended_df):
                     
                     # 使用目前最聰明且穩定的 1.5 Pro 模型 
                     model = genai.GenerativeModel(
-                        model_name="gemini-1.5-pro",
+                        model_name="gemini-1.5-flash",
                         system_instruction=system_prompt
                     )
                     
