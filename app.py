@@ -286,9 +286,8 @@ def render_agentic_rag_chat(user_info, recommended_df):
                     # 設定 Gemini 金鑰
                     genai.configure(api_key=api_key)
                     
-                    # 使用目前最聰明且穩定的 1.5 Pro 模型 
                     model = genai.GenerativeModel(
-                        model_name="gemini-1.5-flash",
+                        model_name="gemini-2.0-flash",
                         system_instruction=system_prompt
                     )
                     
