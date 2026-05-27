@@ -9,4 +9,4 @@ joblib
 sentence-transformers
 torch
 bcrypt
-google-generativeai
+google-generativeai>=0.8.2
