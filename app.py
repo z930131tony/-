@@ -280,24 +280,24 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 """
                 
                 try:
-                    # 🌟 這裡是最乾淨的寫法，保證絕對不會出現 not defined 的錯誤！
-                    api_key = st.secrets["GROQ_API_KEY"]
-                    from groq import Groq
+                    api_key = st.secrets["GEMINI_API_KEY"]
+                    import google.generativeai as genai
                     
-                    # 在這裡即時建立專屬的 client
-                    local_groq_client = Groq(api_key=api_key)
+                    # 設定 Gemini 金鑰
+                    genai.configure(api_key=api_key)
                     
-                    response = local_groq_client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
-                        model="llama-3.3-70b-versatile",
-                        temperature=0.7, 
+                    # 使用目前最聰明且穩定的 1.5 Pro 模型 
+                    model = genai.GenerativeModel(
+                        model_name="gemini-1.5-pro",
+                        system_instruction=system_prompt
                     )
-                    ai_reply = response.choices[0].message.content
+                    
+                    # 呼叫生成
+                    response = model.generate_content(prompt)
+                    ai_reply = response.text
+                    
                 except KeyError:
-                    ai_reply = "⚠️ 找不到 GROQ API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GROQ_API_KEY = \"你的金鑰\"`。"
+                    ai_reply = "⚠️ 找不到 GEMINI API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GEMINI_API_KEY = \"你的金鑰\"`。"
                 except Exception as e:
                     ai_reply = f"抱歉，大腦連線異常：{e}"
 
@@ -358,6 +358,20 @@ def render_google_pagination(total_pages, page_key):
         if st.button("下一頁 ▶", key=f"{page_key}_next", disabled=(current_page == total_pages), use_container_width=True):
             st.session_state[page_key] += 1
             st.rerun()
+
+# ==========================================
+# 定義 Callbacks (優先更新資料庫，解決畫面不同步的問題)
+# ==========================================
+def cb_click_detail(user_id, link):
+    """優先執行：紀錄點擊並設定為作用中連結"""
+    database.log_interaction(user_id, link, "click")
+    st.session_state['active_link'] = link
+    st.toast("✅ 已成功紀錄至點擊歷史！", icon="👀")
+
+def cb_toggle_favorite(user_id, link):
+    """優先執行：切換收藏狀態"""
+    action = toggle_favorite(user_id, link)
+    st.toast(f"✅ 已{action}！", icon="❤️")
 
 def render_activity_card(row, index, mode="recommend", current_user_id=None):
     full_title = str(row['title']).strip()
