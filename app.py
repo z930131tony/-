@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
 import os
 import time
@@ -372,29 +372,107 @@ def login_success(user_info):
 # ==========================================
 st.set_page_config(page_title="南臺科大活動推薦平台", layout="wide", page_icon="🎓")
 
-# ── 全站樣式微調 ──
+# ── 全站樣式防護 (高對比度、防白字白底、清晰可見) ──
 st.markdown('''
 <style>
-html, body, [class*="css"] {
+html, body, [class*="css"], [data-testid="stAppViewContainer"] {
     font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+    color: #1e293b !important;
 }
 [data-testid="stAppViewContainer"] {
-    background: #f8f9fa;
+    background-color: #f8f9fa !important;
 }
+
+/* 主畫面所有文字、標題一律強制使用清晰深色 */
+[data-testid="stAppViewContainer"] h1,
+[data-testid="stAppViewContainer"] h2,
+[data-testid="stAppViewContainer"] h3,
+[data-testid="stAppViewContainer"] h4,
+[data-testid="stAppViewContainer"] h5,
+[data-testid="stAppViewContainer"] p,
+[data-testid="stAppViewContainer"] span,
+[data-testid="stAppViewContainer"] label,
+[data-testid="stAppViewContainer"] .stMarkdown {
+    color: #1e293b !important;
+}
+
+/* 表單與各類卡片容器：強制純白底 + 清楚邊框與陰影，保證高對比 */
+[data-testid="stForm"], .stForm {
+    background-color: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 12px !important;
+    padding: 24px 20px !important;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06) !important;
+}
+
+/* 全域輸入框 (學號、密碼、關鍵字搜尋等)：強制純白底 + 深黑字，打字 100% 清晰可見 */
+input, textarea, [data-testid="stTextInput"] input {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 6px !important;
+}
+input::placeholder, textarea::placeholder {
+    color: #94a3b8 !important;
+}
+[data-testid="stTextInput"] label {
+    color: #1e293b !important;
+    font-weight: 600 !important;
+}
+
+/* 側邊欄：深藍底 + 白色/淺灰字體 */
 [data-testid="stSidebar"] {
-    background: #1e3a5f !important;
+    background-color: #1e3a5f !important;
 }
-[data-testid="stSidebar"] * { color: #e0e7ef !important; }
-[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.15) !important; }
-[data-testid="stVerticalBlockBorderWrapper"] {
-    border: 1px solid #e9ecef !important;
-    border-radius: 10px !important;
-    background: white !important;
-    margin-bottom: 8px !important;
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] h4,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown {
+    color: #f1f5f9 !important;
 }
-.stButton > button {
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.2) !important;
+}
+
+/* 側邊欄輸入框 (文字搜尋、下拉選單)：必須為白底深字，保證輸入文字 100% 可見 */
+[data-testid="stSidebar"] input {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 6px !important;
+}
+[data-testid="stSidebar"] .stSelectbox > div > div {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 6px !important;
+}
+[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] * {
+    color: #0f172a !important;
+}
+
+/* 按鈕樣式與高對比保護 */
+.stButton > button, .stFormSubmitButton > button {
     border-radius: 6px !important;
     font-weight: 500 !important;
+}
+button[kind="primary"], button[data-testid="baseButton-primary"], .stFormSubmitButton > button {
+    background-color: #1e3a5f !important;
+    border-color: #1e3a5f !important;
+}
+button[kind="primary"] *, button[data-testid="baseButton-primary"] *, .stFormSubmitButton > button * {
+    color: #ffffff !important;
+}
+button[kind="secondary"], button[data-testid="baseButton-secondary"] {
+    background-color: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+}
+button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
+    color: #1e293b !important;
 }
 </style>
 ''', unsafe_allow_html=True)
@@ -507,19 +585,22 @@ def login_page():
                     border-radius:12px;text-align:center;margin-bottom:16px;">
             <div style="font-size:2.2rem;margin-bottom:6px;">🎓</div>
             <h1 style="color:white!important;font-size:1.5rem;margin:0 0 4px 0;">南臺科大活動推薦平台</h1>
-            <p style="color:#b0c4d8;margin:0;font-size:0.88rem;">AI 智能推薦 · 校園公告</p>
+            <p style="color:#b0c4d8 !important;margin:0;font-size:0.88rem;">AI 智能推薦 · 校園公告</p>
         </div>
         """, unsafe_allow_html=True)
 
-        with st.container(border=True):
-            with st.form("login_form"):
-                st.markdown("#### 🔐 帳號登入")
-                username = st.text_input("學號 / 教職員編號", placeholder="例如：4B1G0078")
-                password = st.text_input("密碼", type="password", placeholder="請輸入密碼")
-                submit = st.form_submit_button("🚀 登入系統", use_container_width=True, type="primary")
-            
-            st.markdown("<div style='text-align:center;margin:10px 0;color:#bbb;font-size:13px;'>— 或 —</div>", unsafe_allow_html=True)
-            guest_submit = st.button("👤 訪客登入（免帳號體驗）", use_container_width=True)
+        with st.form("login_form"):
+            st.markdown("""
+            <div style="font-size:1.25rem;font-weight:700;color:#0f172a!important;margin:0 0 16px 0;padding-bottom:10px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px;">
+                <span>🔐 帳號登入</span>
+            </div>
+            """, unsafe_allow_html=True)
+            username = st.text_input("學號 / 教職員編號", placeholder="例如：4B1G0078")
+            password = st.text_input("密碼", type="password", placeholder="請輸入密碼")
+            submit = st.form_submit_button("🚀 登入系統", use_container_width=True, type="primary")
+        
+        st.markdown("<div style='text-align:center;margin:12px 0 8px;color:#64748b;font-size:13px;font-weight:500;'>— 或 —</div>", unsafe_allow_html=True)
+        guest_submit = st.button("👤 訪客登入（免帳號體驗）", use_container_width=True)
             
         if submit:
             with st.spinner("正在驗證身分..."):
