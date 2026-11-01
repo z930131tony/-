@@ -6,7 +6,7 @@ DB_NAME = "stust_recommendation.db"
 
 def get_connection():
     """建立並回傳資料庫連線設定防止多執行緒存取衝突"""
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    return sqlite3.connect(DB_NAME, timeout=30.0, check_same_thread=False)
 
 def init_db():
     """初始化資料庫與建立所需之資料表結構"""
@@ -132,8 +132,14 @@ def save_activities_to_db(activities_list):
     for act in activities_list:
         try:
             cursor.execute('''
-                INSERT OR IGNORE INTO activities (title, date, link, tags, dept_target, img)
+                INSERT INTO activities (title, date, link, tags, dept_target, img)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(link) DO UPDATE SET
+                    title = excluded.title,
+                    date = excluded.date,
+                    tags = excluded.tags,
+                    dept_target = excluded.dept_target,
+                    img = excluded.img
             ''', (act['title'], act['date'], act['link'], act['tags'], act['dept_target'], act['img']))
         except Exception as e:
             print(f"寫入活動失敗: {e}")
