@@ -305,24 +305,57 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 """
                 
                 try:
-                    api_key = st.secrets["GEMINI_API_KEY"]
-                    import google.generativeai as genai
-                    
-                    # 設定 Gemini 金鑰
-                    genai.configure(api_key=api_key)
-                    
-                    # 使用目前最聰明且穩定的 1.5 Pro 模型 
-                    model = genai.GenerativeModel(
-                        model_name="gemini-1.5-pro",
-                        system_instruction=system_prompt
-                    )
-                    
-                    # 呼叫生成
-                    response = model.generate_content(prompt)
-                    ai_reply = response.text
-                    
+                    ai_reply = None
+                    # 1. 優先嘗試 Gemini API (預設改用 gemini-1.5-flash，穩定支援免費額度且回應極快)
+                    if "GEMINI_API_KEY" in st.secrets and str(st.secrets["GEMINI_API_KEY"]).strip():
+                        import google.generativeai as genai
+                        genai.configure(api_key=str(st.secrets["GEMINI_API_KEY"]).strip())
+                        
+                        # 依序嘗試可用模型 (避開 1.5-pro 免費層可能回傳 404 的問題)
+                        gemini_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+                        last_err = None
+                        for m_name in gemini_models:
+                            try:
+                                model = genai.GenerativeModel(
+                                    model_name=m_name,
+                                    system_instruction=system_prompt
+                                )
+                                response = model.generate_content(prompt)
+                                ai_reply = response.text
+                                break
+                            except Exception as m_err:
+                                last_err = m_err
+                                continue
+                        
+                        if ai_reply is None and "GROQ_API_KEY" not in st.secrets and last_err is not None:
+                            raise last_err
+
+                    # 2. 若無 Gemini 金鑰或 Gemini 失敗，且存在 Groq 金鑰時自動切換至 Groq
+                    if ai_reply is None and "GROQ_API_KEY" in st.secrets and str(st.secrets["GROQ_API_KEY"]).strip():
+                        from groq import Groq
+                        client = Groq(api_key=str(st.secrets["GROQ_API_KEY"]).strip())
+                        for groq_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                            try:
+                                chat_completion = client.chat.completions.create(
+                                    messages=[
+                                        {"role": "system", "content": system_prompt},
+                                        {"role": "user", "content": prompt}
+                                    ],
+                                    model=groq_model,
+                                )
+                                ai_reply = chat_completion.choices[0].message.content
+                                break
+                            except Exception as g_err:
+                                last_err = g_err
+                                continue
+                        if ai_reply is None and last_err is not None:
+                            raise last_err
+
+                    if ai_reply is None:
+                        ai_reply = "⚠️ 找不到可用的 API Key！請確認已在 `.streamlit/secrets.toml` 中設定 `GEMINI_API_KEY` 或 `GROQ_API_KEY`。"
+
                 except KeyError:
-                    ai_reply = "⚠️ 找不到 GEMINI API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GEMINI_API_KEY = \"你的金鑰\"`。"
+                    ai_reply = "⚠️ 找不到 API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GEMINI_API_KEY = \"你的金鑰\"` 或 `GROQ_API_KEY = \"你的金鑰\"`。"
                 except Exception as e:
                     ai_reply = f"抱歉，大腦連線異常：{e}"
 
