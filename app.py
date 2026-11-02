@@ -13,7 +13,6 @@ import numpy as np
 import streamlit.components.v1 as components
 import joblib
 from sentence_transformers import SentenceTransformer, util
-import torch
 
 
 database.init_db()
