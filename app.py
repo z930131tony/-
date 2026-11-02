@@ -243,6 +243,67 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
 # ==========================================
 # 3. Agentic RAG 與技能 (Skill) 定義
 # ==========================================
+def get_config_key(key_name):
+    """安全取得 API 金鑰：依序支援 UI 輸入 -> Streamlit secrets -> 系統環境變數"""
+    input_key = f"input_{key_name.lower()}"
+    if input_key in st.session_state and str(st.session_state[input_key]).strip():
+        return str(st.session_state[input_key]).strip()
+    if key_name in st.session_state and str(st.session_state[key_name]).strip():
+        return str(st.session_state[key_name]).strip()
+    try:
+        if key_name in st.secrets:
+            val = str(st.secrets[key_name]).strip()
+            if val:
+                return val
+    except Exception:
+        pass
+    val = os.environ.get(key_name, "").strip()
+    if val:
+        return val
+    return None
+
+def call_gemini(prompt, system_prompt, api_key):
+    """呼叫 Google Gemini API，依序嘗試 2.0-flash / 1.5-flash / 1.5-pro 自動容錯"""
+    import google.generativeai as genai
+    genai.configure(api_key=api_key)
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    last_err = None
+    for m in models:
+        try:
+            model = genai.GenerativeModel(
+                model_name=m,
+                system_instruction=system_prompt
+            )
+            res = model.generate_content(prompt)
+            if res and res.text:
+                return res.text, f"Google Gemini ({m})"
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err if last_err else RuntimeError("Gemini 所有模型連線皆失敗")
+
+def call_groq(prompt, system_prompt, api_key):
+    """呼叫 Groq API，支援 Llama-3.3-70b-versatile 與 Llama-3.1-8b-instant"""
+    from groq import Groq
+    client = Groq(api_key=api_key)
+    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    last_err = None
+    for m in models:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                model=m,
+            )
+            if chat_completion.choices and chat_completion.choices[0].message.content:
+                return chat_completion.choices[0].message.content, f"Groq ({m})"
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err if last_err else RuntimeError("Groq 所有模型連線皆失敗")
+
 def skill_auto_register(student_id, activity_title):
     time.sleep(1.5) 
     return f"✅ 技能執行成功：已成功為學號 {student_id} 報名【{activity_title}】！已同步至校務系統。"
@@ -250,6 +311,54 @@ def skill_auto_register(student_id, activity_title):
 def render_agentic_rag_chat(user_info, recommended_df):
     st.title("🤖 校園 AI 導覽員 (Agentic RAG)")
     st.info("我不只會用語意搜尋推薦活動，只要跟我說一聲，我還能啟動【Skill】直接幫你報名喔！")
+
+    # 取得目前雙 API 金鑰狀態
+    gemini_key = get_config_key("GEMINI_API_KEY")
+    groq_key = get_config_key("GROQ_API_KEY")
+    has_any_key = bool(gemini_key or groq_key)
+
+    with st.expander("⚙️ AI 模型核心與 API 設定 (Gemini / Groq)", expanded=not has_any_key):
+        col_m1, col_m2 = st.columns([3, 2])
+        with col_m1:
+            st.selectbox(
+                "選擇 AI 模型來源",
+                [
+                    "自動容錯 (Gemini 優先，失敗自動切換 Groq)",
+                    "Google Gemini (gemini-2.0-flash / 1.5-flash)",
+                    "Groq Cloud (llama-3.3-70b / llama-3.1-8b)"
+                ],
+                index=0,
+                key="ai_provider_selection"
+            )
+        with col_m2:
+            st.markdown("**目前金鑰狀態：**")
+            g_badge = "🟢 已設定" if gemini_key else "⚪ 未設定"
+            gr_badge = "🟢 已設定" if groq_key else "⚪ 未設定"
+            st.markdown(f"- **Gemini API**：{g_badge}\n- **Groq API**：{gr_badge}")
+
+        col_k1, col_k2 = st.columns(2)
+        with col_k1:
+            st.text_input(
+                "Gemini API Key (自訂輸入，直接生效)",
+                type="password",
+                key="input_gemini_api_key",
+                placeholder="AIzaSy...",
+                help="如果已在 .streamlit/secrets.toml 設定可留空"
+            )
+        with col_k2:
+            st.text_input(
+                "Groq API Key (自訂輸入，直接生效)",
+                type="password",
+                key="input_groq_api_key",
+                placeholder="gsk_...",
+                help="如果已在 .streamlit/secrets.toml 設定可留空"
+            )
+
+        st.caption("💡 提示：本專案支援免手動重複輸入！您可直接在專案根目錄 `.streamlit/secrets.toml` 中配置金鑰，部署至 Streamlit Cloud 時請至 Settings > Secrets 設定。")
+        st.markdown(
+            "- 免費申請 Gemini 金鑰：[Google AI Studio](https://aistudio.google.com/)\n"
+            "- 免費申請 Groq 金鑰：[Groq Console](https://console.groq.com/keys)"
+        )
     
     if "messages" not in st.session_state: st.session_state.messages = []
     if "pending_skill_activity" not in st.session_state: st.session_state.pending_skill_activity = None
@@ -304,63 +413,56 @@ def render_agentic_rag_chat(user_info, recommended_df):
                 {context_str}
                 """
                 
+                ai_reply = None
+                used_engine = None
+                curr_gemini_key = get_config_key("GEMINI_API_KEY")
+                curr_groq_key = get_config_key("GROQ_API_KEY")
+                provider_choice = st.session_state.get("ai_provider_selection", "自動容錯 (Gemini 優先，失敗自動切換 Groq)")
+
                 try:
-                    ai_reply = None
-                    # 1. 優先嘗試 Gemini API (預設改用 gemini-1.5-flash，穩定支援免費額度且回應極快)
-                    if "GEMINI_API_KEY" in st.secrets and str(st.secrets["GEMINI_API_KEY"]).strip():
-                        import google.generativeai as genai
-                        genai.configure(api_key=str(st.secrets["GEMINI_API_KEY"]).strip())
-                        
-                        # 依序嘗試可用模型 (避開 1.5-pro 免費層可能回傳 404 的問題)
-                        gemini_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-                        last_err = None
-                        for m_name in gemini_models:
+                    # 1. 指定使用 Google Gemini
+                    if "Gemini (" in provider_choice:
+                        if not curr_gemini_key:
+                            ai_reply = "⚠️ 尚未設定 **Gemini API Key**！請於上方設定面板貼上，或在 `.streamlit/secrets.toml` 中配置 `GEMINI_API_KEY`。"
+                        else:
+                            ai_reply, used_engine = call_gemini(prompt, system_prompt, curr_gemini_key)
+
+                    # 2. 指定使用 Groq
+                    elif "Groq" in provider_choice and "Gemini" not in provider_choice:
+                        if not curr_groq_key:
+                            ai_reply = "⚠️ 尚未設定 **Groq API Key**！請於上方設定面板貼上，或在 `.streamlit/secrets.toml` 中配置 `GROQ_API_KEY`。"
+                        else:
+                            ai_reply, used_engine = call_groq(prompt, system_prompt, curr_groq_key)
+
+                    # 3. 自動容錯模式 (雙 API 自動備援)
+                    else:
+                        if curr_gemini_key:
                             try:
-                                model = genai.GenerativeModel(
-                                    model_name=m_name,
-                                    system_instruction=system_prompt
-                                )
-                                response = model.generate_content(prompt)
-                                ai_reply = response.text
-                                break
-                            except Exception as m_err:
-                                last_err = m_err
-                                continue
-                        
-                        if ai_reply is None and "GROQ_API_KEY" not in st.secrets and last_err is not None:
-                            raise last_err
+                                ai_reply, used_engine = call_gemini(prompt, system_prompt, curr_gemini_key)
+                            except Exception as gemini_err:
+                                if curr_groq_key:
+                                    try:
+                                        ai_reply, used_engine = call_groq(prompt, system_prompt, curr_groq_key)
+                                        used_engine += " (Gemini 連線異常，已自動切換備援)"
+                                    except Exception as groq_err:
+                                        raise RuntimeError(f"Gemini 連線失敗 ({gemini_err})；備援 Groq 連線亦失敗 ({groq_err})")
+                                else:
+                                    raise gemini_err
+                        elif curr_groq_key:
+                            ai_reply, used_engine = call_groq(prompt, system_prompt, curr_groq_key)
+                        else:
+                            ai_reply = "⚠️ 找不到可用的 API Key！請在上方【⚙️ AI 模型核心與 API 設定】面板中貼上金鑰，或於 `.streamlit/secrets.toml` 中設定 `GEMINI_API_KEY` 或 `GROQ_API_KEY`。"
 
-                    # 2. 若無 Gemini 金鑰或 Gemini 失敗，且存在 Groq 金鑰時自動切換至 Groq
-                    if ai_reply is None and "GROQ_API_KEY" in st.secrets and str(st.secrets["GROQ_API_KEY"]).strip():
-                        from groq import Groq
-                        client = Groq(api_key=str(st.secrets["GROQ_API_KEY"]).strip())
-                        for groq_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
-                            try:
-                                chat_completion = client.chat.completions.create(
-                                    messages=[
-                                        {"role": "system", "content": system_prompt},
-                                        {"role": "user", "content": prompt}
-                                    ],
-                                    model=groq_model,
-                                )
-                                ai_reply = chat_completion.choices[0].message.content
-                                break
-                            except Exception as g_err:
-                                last_err = g_err
-                                continue
-                        if ai_reply is None and last_err is not None:
-                            raise last_err
-
-                    if ai_reply is None:
-                        ai_reply = "⚠️ 找不到可用的 API Key！請確認已在 `.streamlit/secrets.toml` 中設定 `GEMINI_API_KEY` 或 `GROQ_API_KEY`。"
-
-                except KeyError:
-                    ai_reply = "⚠️ 找不到 API Key！請確認已建立 `.streamlit/secrets.toml` 檔案，並且裡面有 `GEMINI_API_KEY = \"你的金鑰\"` 或 `GROQ_API_KEY = \"你的金鑰\"`。"
                 except Exception as e:
                     ai_reply = f"抱歉，大腦連線異常：{e}"
 
                 st.markdown(ai_reply)
-                st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+                if used_engine:
+                    st.caption(f"⚡ 模型回應來源：`{used_engine}`")
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": ai_reply + (f"\n\n*(⚡ 來源: {used_engine})*" if used_engine else "")
+                })
 
                 if any(kw in prompt for kw in ["報名", "參加", "加一", "+1", "報這個"]) and not any(neg in prompt for neg in ["不想", "不要", "沒興趣"]):
                     target = "未知活動"
@@ -377,7 +479,8 @@ def render_agentic_rag_chat(user_info, recommended_df):
                                     break
                             target = matched if matched else top_3.iloc[0]['title']
                     st.session_state.pending_skill_activity = target
-                    st.rerun() 
+                    st.rerun()
+
 
 # ==========================================
 # 4. 模擬使用者資料庫 (帳號管理)
