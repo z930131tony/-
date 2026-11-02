@@ -263,24 +263,74 @@ def get_config_key(key_name):
     return None
 
 def call_gemini(prompt, system_prompt, api_key):
-    """呼叫 Google Gemini API，依序嘗試 2.0-flash / 1.5-flash / 1.5-pro 自動容錯"""
+    """呼叫 Google Gemini API：自動動態探測可用模型清單，確保不因舊模型下線而 404"""
     import google.generativeai as genai
     genai.configure(api_key=api_key)
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-    last_err = None
-    for m in models:
+
+    # 1. 優先動態取得該 API Key 當前可用且支援 generateContent 的模型清單
+    active_models = []
+    try:
+        for m in genai.list_models():
+            if "generateContent" in getattr(m, "supported_generation_methods", []):
+                clean_name = m.name.replace("models/", "")
+                active_models.append(clean_name)
+    except Exception:
+        pass
+
+    # 權重評分排序：優先選用最新極速且穩定的 Flash / Pro 模型
+    def get_sort_key(name):
+        n = name.lower()
+        if "2.5-flash" in n: return 0
+        if "2.0-flash" in n and "exp" not in n: return 1
+        if "2.5-pro" in n: return 2
+        if "2.0-flash-exp" in n: return 3
+        if "1.5-flash-latest" in n: return 4
+        if "1.5-flash" in n and "8b" not in n: return 5
+        if "flash" in n: return 6
+        if "pro" in n: return 7
+        return 20
+
+    if active_models:
+        active_models.sort(key=get_sort_key)
+        candidate_models = active_models
+    else:
+        # 若因網路權限無法動態列表，依序嘗試最新世代候選清單 (已移除已退役的舊 1.5-pro)
+        candidate_models = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+        ]
+
+    err_records = []
+    for m in candidate_models:
         try:
-            model = genai.GenerativeModel(
-                model_name=m,
-                system_instruction=system_prompt
-            )
-            res = model.generate_content(prompt)
-            if res and res.text:
+            try:
+                model = genai.GenerativeModel(
+                    model_name=m,
+                    system_instruction=system_prompt
+                )
+                res = model.generate_content(prompt)
+            except Exception as se:
+                # 兼容處理：某些模型不支援直接傳入 system_instruction，改以 prompt 內嵌形式
+                if "system_instruction" in str(se).lower() or "400" in str(se):
+                    model = genai.GenerativeModel(model_name=m)
+                    combined_prompt = f"{system_prompt}\n\n【使用者問題】\n{prompt}"
+                    res = model.generate_content(combined_prompt)
+                else:
+                    raise se
+
+            if res and hasattr(res, "text") and res.text:
                 return res.text, f"Google Gemini ({m})"
         except Exception as e:
-            last_err = e
+            err_records.append(f"{m}: {e}")
             continue
-    raise last_err if last_err else RuntimeError("Gemini 所有模型連線皆失敗")
+
+    err_summary = "；".join(err_records[:3]) if err_records else "未找到可用模型"
+    raise RuntimeError(f"Gemini API 調用失敗 ({err_summary})")
+
 
 def call_groq(prompt, system_prompt, api_key):
     """呼叫 Groq API，支援 Llama-3.3-70b-versatile 與 Llama-3.1-8b-instant"""
@@ -300,9 +350,15 @@ def call_groq(prompt, system_prompt, api_key):
             if chat_completion.choices and chat_completion.choices[0].message.content:
                 return chat_completion.choices[0].message.content, f"Groq ({m})"
         except Exception as e:
+            err_msg = str(e)
+            if "expired_api_key" in err_msg:
+                raise RuntimeError("Groq API 金鑰已過期 (expired_api_key)！請至 https://console.groq.com/keys 重新生成新金鑰並更新。")
+            if "Invalid API Key" in err_msg:
+                raise RuntimeError("Groq API 金鑰無效，請確認金鑰是否複製完整。")
             last_err = e
             continue
     raise last_err if last_err else RuntimeError("Groq 所有模型連線皆失敗")
+
 
 def skill_auto_register(student_id, activity_title):
     time.sleep(1.5) 
