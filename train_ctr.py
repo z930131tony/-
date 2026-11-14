@@ -13,36 +13,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import joblib
 import os
-
-def extract_features(user_dept, user_year, act_dept, act_tags_list, act_title, user_tags):
-    """
-    特徵工程模組：將文字、系所與標籤轉換為機器學習特徵向量
-    回傳特徵維度 (長度 5)：
-    1. dept_score: 系所吻合度 (2.0: 直接吻合, 1.0: 全校, 0.0: 他系)
-    2. tag_overlap: 興趣標籤與活動標籤重疊數
-    3. is_senior: 是否為大三、大四或碩士高年級
-    4. is_career: 是否為實習/徵才/職缺/工讀
-    5. senior_career: 高年級與就業活動的交叉特徵 (互動項)
-    """
-    act_dept = str(act_dept or '全校')
-    user_dept = str(user_dept or '')
-    
-    if user_dept in act_dept or act_dept in user_dept:
-        dept_score = 2.0
-    elif act_dept == '全校':
-        dept_score = 1.0
-    else:
-        dept_score = 0.0
-        
-    tags_set = set(act_tags_list) if isinstance(act_tags_list, (list, set)) else set(str(act_tags_list or '').split())
-    overlap = float(len(set(user_tags).intersection(tags_set)))
-    
-    is_senior = 1.0 if any(y in str(user_year or '') for y in ['三', '四', '碩']) else 0.0
-    search_txt = str(act_tags_list or '') + ' ' + str(act_title or '')
-    is_career = 1.0 if any(kw in search_txt for kw in ['實習', '徵才', '就業', '職缺', '工讀']) else 0.0
-    senior_career = is_senior * is_career
-    
-    return [dept_score, overlap, is_senior, is_career, senior_career]
+from features import extract_features, enrich_activity_tags, get_user_profile_tags, get_fake_courses, click_probability
 
 def train_model():
     """從資料庫萃取資料並訓練平衡化隨機森林點擊率 (CTR) 預測模型"""
@@ -59,8 +30,10 @@ def train_model():
         return
 
     print("📊 建構特徵訓練矩陣與標籤...")
-    from app import get_user_profile_tags
-    
+    # 與線上推論 (app.load_data) 相同：活動標籤先經過標題關鍵字擴充，特徵才會一致
+    df_acts['tags'] = df_acts['tags'].apply(lambda x: x.split() if isinstance(x, str) and x.strip() else ['一般'])
+    df_acts = enrich_activity_tags(df_acts)
+
     clicked_pairs = set(zip(df_interactions['student_id'], df_interactions['activity_link']))
     X = []
     y = []
@@ -70,14 +43,13 @@ def train_model():
         u_dept = user['dept']
         u_year = user['year']
         
-        # 依系所配置合理之探索課程以獲取全貌標籤
-        fake_courses = ['程式', 'AI'] if '資工' in u_dept else (['食品', '安全'] if '食品' in u_dept else ['設計'])
-        u_tags = get_user_profile_tags(u_dept, fake_courses, u_year)
+        # 使用與 app.py 相同的模擬修課紀錄，避免訓練與推論特徵不一致
+        u_tags = get_user_profile_tags(u_dept, get_fake_courses(u_dept), u_year)
 
         for _, act in df_acts.iterrows():
             act_link = act['link']
             act_dept = act['dept_target']
-            act_tags = act['tags'].split() if isinstance(act['tags'], str) else []
+            act_tags = act['tags']
             act_title = act['title']
 
             features = extract_features(u_dept, u_year, act_dept, act_tags, act_title, u_tags)
@@ -90,17 +62,19 @@ def train_model():
     pos_count = int(np.sum(y))
     print(f"📈 樣本總數：{len(y)} 筆，其中正樣本（點擊）：{pos_count} 筆")
 
+    # 點擊紀錄對不到任何現存活動 (例如活動已被刪除) 時只有單一類別，訓練出的模型沒有意義
+    if pos_count == 0 or pos_count == len(y):
+        print("⚠️ 警告：訓練資料只有單一類別，無法訓練點擊率模型，保留原本的 ctr_model.pkl。")
+        return
+
     # 負樣本下採樣 (Negative Downsampling) 解決 99.7% 極度不平衡問題
     np.random.seed(42)
     pos_idx = np.where(y == 1)[0]
     neg_idx = np.where(y == 0)[0]
     
-    if pos_count > 0:
-        sample_size = min(len(neg_idx), max(pos_count * 5, 25))
-        sampled_neg_idx = np.random.choice(neg_idx, size=sample_size, replace=False)
-        train_idx = np.concatenate([pos_idx, sampled_neg_idx])
-    else:
-        train_idx = np.arange(len(y))
+    sample_size = min(len(neg_idx), max(pos_count * 5, 25))
+    sampled_neg_idx = np.random.choice(neg_idx, size=sample_size, replace=False)
+    train_idx = np.concatenate([pos_idx, sampled_neg_idx])
 
     X_train_sub = X[train_idx]
     y_train_sub = y[train_idx]
