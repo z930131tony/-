@@ -11,7 +11,7 @@ import pandas as pd
 import urllib3
 import re
 import time
-import random
+from urllib.parse import urljoin
 
 # 略過安全連線憑證警告以利開發環境進行網頁資料抓取
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -35,9 +35,42 @@ def is_valid_activity(title, href):
     return True
 
 def clean_activity_title(title):
-    """去除標題末尾的系所麵包屑字串 (例如：資工系 單位公告 151)"""
-    cleaned = re.sub(r'\s*(資工系|視傳系|電子系|機械系)?\s*單位公告\s*\d+', '', title)
+    """去除標題末尾的系所麵包屑字串 (例如：資工系 單位公告 151 2026/11/12)"""
+    title = " ".join(str(title).split())
+    cleaned = re.sub(r'\s*(\S+系)?\s*(單位公告|系上公告)\s*\d*\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})?\s*$', '', title)
     return cleaned.strip()
+
+DATE_RE = re.compile(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})')
+# 發布單位需以「系 / 研究所 / 學程」結尾才視為系所，避免「圖資處網路系統組」這類行政單位被誤判
+DEPT_RE = re.compile(r'(系|研究所|學程)$')
+
+def normalize_date(text):
+    """擷取第一個日期並統一為 YYYY/MM/DD (補零，字串排序才正確)；找不到回傳 None"""
+    m = DATE_RE.search(str(text or ''))
+    if not m:
+        return None
+    y, mo, d = m.groups()
+    return f"{y}/{int(mo):02d}/{int(d):02d}"
+
+def _merge_duplicates(items, key_fn):
+    """依 key 合併重複公告：聯集標籤，並優先保留有明確系所的 dept_target"""
+    merged = {}
+    for v in items:
+        key = key_fn(v)
+        if key not in merged:
+            merged[key] = dict(v)
+            continue
+        cur = merged[key]
+        tags = [t for t in cur['tags'].split() + v['tags'].split() if t]
+        tags = list(dict.fromkeys(tags))
+        if len(tags) > 1 and '一般' in tags:
+            tags.remove('一般')
+        cur['tags'] = ' '.join(tags)
+        if cur.get('dept_target') == '全校' and v.get('dept_target') != '全校':
+            cur['dept_target'] = v['dept_target']
+        if cur.get('date') == '近期' and v.get('date') != '近期':
+            cur['date'] = v['date']
+    return list(merged.values())
 
 def scrape_stust_dept_aware(max_pages=2, progress_callback=None, step_offset=0, total_steps=14):
     """建立主爬蟲模組負責抓取新聞網頁資訊"""
@@ -89,9 +122,10 @@ def scrape_stust_dept_aware(max_pages=2, progress_callback=None, step_offset=0, 
                 page_data_count = 0
 
                 for link in links:
-                    title = link.text.strip()
                     href = link['href']
-                    
+                    # 列表的 <a> 內含 <br/> 與多餘空白，title 屬性才是完整標題
+                    title = " ".join((link.get("title") or link.get_text()).split())
+
                     # 過濾無效連結與網站導覽項目
                     if not re.search(r'/id/\d+', href): continue
                     if "classid" in href: continue
@@ -99,67 +133,44 @@ def scrape_stust_dept_aware(max_pages=2, progress_callback=None, step_offset=0, 
 
                     title = clean_activity_title(title)
 
-                    dept_name = "全校" 
-                    parent_row = link.find_parent(["tr", "li", "div", "td"]) 
-                    
-                    if parent_row:
-                        grand_parent = parent_row.find_parent(["tr", "li"])
-                        search_target = grand_parent if grand_parent else parent_row
-                        
-                        dept_tag = search_target.find("span", id=re.compile("lbl_sortname"))
-                        if dept_tag:
-                            raw_dept = dept_tag.text.strip()
-                            if "系" in raw_dept or "所" in raw_dept or "學程" in raw_dept:
-                                dept_name = raw_dept
-                            else:
-                                dept_name = "全校" 
+                    # 每筆公告是一列 <tr>：發布單位、類別、日期都在同列的 <span> 裡
+                    row = link.find_parent("tr") or link.find_parent("li")
 
-                    # 組合相對路徑為完整網址
-                    clean_href = href.replace("..", "")
-                    if not clean_href.startswith("http"):
-                        if clean_href.startswith("/"):
-                            full_link = "https://news.stust.edu.tw" + clean_href
-                        else:
-                            full_link = "https://news.stust.edu.tw/" + clean_href
-                    else:
-                        full_link = clean_href
+                    def row_span(suffix):
+                        tag = row.find("span", id=re.compile(suffix)) if row else None
+                        return " ".join(tag.get_text().split()) if tag else ""
 
-                    # 提取公告發布日期
-                    date = "近期"
-                    if parent_row:
-                        # 優先從同列 (tr) 的獨立日期欄位提取，避免誤抓標題中的截止日
-                        tr_parent = link.find_parent("tr")
-                        cell_date_found = None
-                        if tr_parent:
-                            for td_cell in tr_parent.find_all("td"):
-                                if td_cell.find("a") == link:
-                                    continue
-                                c_text = td_cell.get_text().strip()
-                                m = re.search(r'^\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})\s*$', c_text)
-                                if m:
-                                    cell_date_found = m.group(1).replace("-", "/")
-                                    break
-                        if cell_date_found:
-                            date = cell_date_found
-                        else:
-                            text_content = parent_row.get_text()
-                            date_match = re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', text_content)
-                            if not date_match and parent_row.parent:
-                                text_content = parent_row.parent.get_text()
-                                date_match = re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', text_content)
-                            if date_match:
-                                date = date_match.group(0).replace("-", "/")
+                    raw_dept = row_span("lbl_sortname")
+                    dept_name = raw_dept if DEPT_RE.search(raw_dept) else "全校"
+                    class_name = row_span("lbl_classname")
+
+                    # 組合相對路徑為完整網址 (../id/123 相對於 /User/ 目錄)
+                    full_link = urljoin(page_url, href)
+
+                    # 只從同列的發布日期欄位取日期，避免誤抓標題中的截止日或別列的日期
+                    date = normalize_date(row_span("lbl_time"))
+                    if not date and row:
+                        for td_cell in row.find_all("td"):
+                            if td_cell.find("a") is not None:
+                                continue
+                            if re.fullmatch(r'\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*', td_cell.get_text()):
+                                date = normalize_date(td_cell.get_text())
+                                break
+                    date = date or "近期"
 
                     # 依據標題關鍵字自動配置相關標籤
                     tags = []
                     if "競賽" in title: tags.append("競賽")
                     if "獎學金" in title: tags.append("獎學金")
                     if "實習" in title: tags.append("實習")
-                    
-                    if cat_name != "所有訊息": 
+
+                    if cat_name != "所有訊息":
                         tags.append(cat_name)
-                        
-                    if dept_name != "全校": tags.append("系所活動") 
+                    # 列表本身就標示了類別 (如 研討會 / 徵才訊息)，「所有訊息」頁也能分類
+                    if class_name and class_name not in tags:
+                        tags.append(class_name)
+
+                    if dept_name != "全校": tags.append("系所活動")
                     if not tags: tags.append("一般")
 
                     all_activities.append({
@@ -184,22 +195,8 @@ def scrape_stust_dept_aware(max_pages=2, progress_callback=None, step_offset=0, 
         
         time.sleep(0.3)
 
-    # 移除重複之活動資料：以唯一連結為鍵，優先保留有明確分類 tag 的版本
-    dedup = {}
-    for v in all_activities:
-        key = v['link']
-        if key not in dedup:
-            dedup[key] = v
-        else:
-            existing_tags = dedup[key]['tags']
-            new_tags = v['tags']
-            if existing_tags in ('一般', '') and new_tags not in ('一般', ''):
-                dedup[key] = v
-            elif new_tags not in ('一般', '') and existing_tags not in ('一般', ''):
-                merged = set(existing_tags.split(' ')) | set(new_tags.split(' '))
-                dedup[key] = dict(dedup[key])
-                dedup[key]['tags'] = ' '.join(t for t in merged if t)
-    return list(dedup.values()), current_step
+    # 同一則公告會同時出現在「所有訊息」與其分類頁：以連結為鍵合併標籤
+    return _merge_duplicates(all_activities, lambda v: v['link']), current_step
 
 
 def scrape_department_site(url_template, dept_name, default_tags, max_pages=1, progress_callback=None, step_offset=0, total_steps=14):
@@ -233,30 +230,30 @@ def scrape_department_site(url_template, dept_name, default_tags, max_pages=1, p
             page_data_count = 0
             
             for link in links:
-                title = link.text.strip()
                 href = link['href']
 
-                # 強化過濾無效連結與頁腳雜訊
+                # 只收公告連結 (/tc/news/1-96678-n)，排除選單中「沿革與規模」「學生獲獎114年」等導覽頁
+                if not re.search(r'/news/\d+-\d+', href): continue
+
+                # 公告列是整個 <a class="item">：第一個 <p> 是標題，其餘欄位為單位/類別/點閱數/日期
+                first_p = link.find("p")
+                title = " ".join((first_p.get_text() if first_p else link.get_text()).split())
                 if not is_valid_activity(title, href): continue
                 title = clean_activity_title(title)
 
-                clean_href = href.replace("..", "")
-                if not clean_href.startswith("http"):
-                    base_domain = "/".join(url.split("/")[:3])
-                    if clean_href.startswith("/"):
-                        full_link = base_domain + clean_href
-                    else:
-                        full_link = base_domain + "/" + clean_href
-                else:
-                    full_link = clean_href
+                full_link = urljoin(url, href)
 
-                date = "近期"
-                parent = link.find_parent()
-                if parent:
-                    text_content = parent.get_text()
-                    date_match = re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', text_content)
-                    if date_match:
-                        date = date_match.group(0).replace("-", "/")
+                # 日期只在這筆公告自己的欄位內找 (跳過標題，避免抓到標題裡的活動日期)，
+                # 也避免整個列表共用第一筆的日期
+                date = None
+                for p in reversed(link.find_all("p")[1:]):
+                    date = normalize_date(p.get_text())
+                    if date: break
+                if not date and not first_p:
+                    container = link.parent
+                    if container and len(container.find_all("a", href=re.compile(r'/news/\d+-\d+'))) == 1:
+                        date = normalize_date(container.get_text(" "))
+                date = date or "近期"
 
                 activities.append({
                     "title": title,
@@ -321,8 +318,9 @@ def fetch_all_sources(max_pages=2, progress_callback=None):
     )
     all_combined_data.extend(vc_data)
     
-    # 以網址為鍵值過濾重複之活動資料
-    unique_data = list({v['link']: v for v in all_combined_data}.values())
+    # 系網公告與新聞網是同一則公告的不同網址 (csie .../news/1-96678-n ↔ news .../id/96678)，
+    # 以「標題 + 日期」合併，避免同一活動在推薦清單出現兩次
+    unique_data = _merge_duplicates(all_combined_data, lambda v: (v['title'], v['date']))
     
     print(f"\n🎉 所有來源抓取完畢！總共整合了 {len(unique_data)} 筆不重複資料。")
     return unique_data

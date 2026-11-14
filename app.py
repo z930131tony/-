@@ -4,7 +4,9 @@ import os
 import time
 import scraper
 import database
-from train_ctr import extract_features
+import html
+from features import (extract_features, enrich_activity_tags, get_user_profile_tags,
+                      get_fake_courses, dept_matches, is_senior, click_probability)
 import re
 import jieba
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -29,6 +31,11 @@ def load_semantic_model():
 def get_corpus_embeddings(_model, texts_tuple):
     """快取活動語意特徵向量，大幅提升搜尋回應速度至 0.02 秒"""
     return _model.encode(list(texts_tuple), convert_to_tensor=True)
+
+@st.cache_resource(show_spinner=False)
+def load_ctr_model(_mtime):
+    """快取 CTR 模型，避免每次畫面重繪都重新讀檔；檔案更新 (mtime 改變) 時自動重新載入"""
+    return joblib.load("ctr_model.pkl")
 
 def load_data():
     # 優先從本地 SQLite 讀取，無需等待網路請求，載入即刻完成
@@ -64,66 +71,12 @@ def load_data():
             df.sort_values(by="parsed_date", ascending=False, na_position='last', inplace=True)
         return df
     except Exception as e:
+        st.error(f"活動資料處理失敗: {e}")
         return pd.DataFrame()
 
 # ==========================================
 # 2. 推薦核心與特徵工程
 # ==========================================
-def enrich_activity_tags(df):
-    tag_rules = {
-        "資安": ["資安", "漏洞", "駭客", "密碼", "防護"],
-        "AI": ["AI", "人工智慧", "機器學習"],
-        "徵才": ["徵才", "招募", "誠徵", "專任助理", "職缺", "面試"],
-        "實習": ["實習", "intern"],
-        "研討會": ["研討會", "論壇", "講座", "說明會"],
-        "半導體": ["半導體", "製程", "晶片", "電性"],
-        "競賽": ["競賽", "比賽", "黑客松", "挑戰賽"]
-    }
-    def extract_tags(title, existing_tags):
-        tags = set(existing_tags) if isinstance(existing_tags, list) else set([existing_tags])
-        if "一般" in tags and len(tags) == 1: tags.remove("一般")
-        for tag, keywords in tag_rules.items():
-            if any(kw.lower() in str(title).lower() for kw in keywords): tags.add(tag)
-        if not tags: tags.add("校園公告")
-        return list(tags)
-
-    df['tags'] = df.apply(lambda row: extract_tags(row['title'], row['tags']), axis=1)
-    return df
-
-def get_user_profile_tags(department, past_courses, user_year=""):
-    user_tags = set()
-    dept_tag_map = {
-        "資工": ["資安", "漏洞", "AI", "資訊", "軟體", "網路", "系統"],
-        "食品": ["食品", "衛生", "農業", "檢驗", "化學"],
-        "企管": ["商業", "行銷", "管理", "創新", "產業"],
-        "設計": ["文化", "設計", "藝術", "書展", "展覽"],
-        "電機": ["半導體", "製程", "電性", "機電", "工程"],
-        "應英": ["雙語", "EMI", "外語", "英文", "國際"]
-    }
-    for key, tags in dept_tag_map.items():
-        if key in department: user_tags.update(tags)
-            
-    course_tag_map = {
-        ("程式", "python", "java", "軟體", "網頁"): "資工",
-        ("ai", "人工智慧", "機器學習", "深度學習"): "AI",
-        ("安全", "密碼", "駭客", "防護"): "資安",
-        ("行銷", "企管", "管理", "商業"): "企管",
-        ("設計", "視覺", "動畫", "藝術"): "設計",
-        ("電機", "電路", "半導體", "晶片"): "半導體",
-        ("食品", "烘焙", "營養", "檢驗"): "食品",
-    }
-    for course in past_courses:
-        for keywords, tag in course_tag_map.items():
-            if any(kw.lower() in course.lower() for kw in keywords): user_tags.add(tag)
-                
-    if any(y in user_year for y in ["三", "四", "碩"]):
-        user_tags.update(["實習", "徵才", "招募", "專任助理", "就業", "企業", "職缺"])
-    elif any(y in user_year for y in ["一", "二"]):
-        user_tags.update(["社團", "營隊", "志工", "迎新", "校園活動", "講座", "工讀"])
-
-    user_tags.update(["研討會", "獎學金", "計畫", "講座"])
-    return user_tags
-
 def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_year=""):
     if activities_df.empty: return activities_df
     df = activities_df.copy()
@@ -136,11 +89,12 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
     if 'parsed_date' not in df.columns and 'date' in df.columns:
         df['parsed_date'] = pd.to_datetime(df['date'].astype(str).str.replace('/', '-'), errors='coerce')
 
-    ctr_model = None
-    if os.path.exists("ctr_model.pkl"):
-        ctr_model = joblib.load("ctr_model.pkl")
+    ctr_model = load_ctr_model(os.path.getmtime("ctr_model.pkl")) if os.path.exists("ctr_model.pkl") else None
     
-    df['content'] = df['title'] + " " + df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)) + " " + df['dept_target']
+    # dept_target / title 若為 NULL，字串相加會變 NaN，jieba 斷詞失敗後 TF-IDF 會整個靜默歸零
+    df['content'] = (df['title'].fillna('').astype(str) + " "
+                     + df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)) + " "
+                     + df['dept_target'].fillna('全校').astype(str))
     clicked_titles = df[df['link'].isin(clicked_links)]['title'].tolist()
     user_profile_text = f"{user_dept} {user_year} " + " ".join(user_tags) + " " + " ".join(clicked_titles)
     all_documents = [user_profile_text] + df['content'].tolist()
@@ -169,9 +123,7 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
                 )
                 for _, row in df.iterrows()
             ])
-            proba_matrix = ctr_model.predict_proba(features_matrix)
-            c_idx = list(ctr_model.classes_).index(1) if 1 in ctr_model.classes_ else 0
-            click_probs = proba_matrix[:, c_idx]
+            click_probs = click_probability(ctr_model, features_matrix)
             predict_scores = click_probs * 18.0
         except Exception:
             predict_scores = np.zeros(len(df))
@@ -187,7 +139,7 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
         # 1. 系所關聯加權
         if target_dept == "全校":
             rule_score += 1.0
-        elif user_dept in target_dept or target_dept in user_dept:
+        elif dept_matches(user_dept, target_dept):
             rule_score += 12.0
             reasons.append(f"👑 {user_dept} 專屬")
             
@@ -198,7 +150,7 @@ def calculate_recommendation(user_tags, user_dept, user_id, activities_df, user_
             rule_score += len(overlap) * 2.5
             
         # 3. 高年級就業導向
-        if any(y in user_year for y in ["三", "四", "碩"]):
+        if is_senior(user_year):
             activity_text = str(row['tags']) + " " + str(row['title'])
             if any(kw in activity_text for kw in ["實習", "徵才", "就業", "職缺"]):
                 rule_score += 15.0
@@ -713,12 +665,12 @@ def render_activity_card(row, index, mode="recommend", current_user_id=None):
     safe_tw = title_tw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe_en = title_en.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     tags = row['tags'] if isinstance(row['tags'], list) else [t.strip() for t in str(row['tags']).split(" ") if t.strip()]
-    dept_target = row.get('dept_target', '全校')
+    dept_target = html.escape(str(row.get('dept_target') or '全校'))
 
     # tag HTML（簡潔灰底膠囊）
     tag_html = " ".join(
         f"<span style='display:inline-block;background:#f0f2f5;color:#555;border-radius:4px;"
-        f"padding:1px 8px;font-size:11px;margin:2px 2px 2px 0;'>#{t}</span>"
+        f"padding:1px 8px;font-size:11px;margin:2px 2px 2px 0;'>#{html.escape(str(t))}</span>"
         for t in tags if t
     )
 
@@ -903,9 +855,7 @@ else:
     recommended_df = pd.DataFrame()
     
     if not df_activities.empty:
-        fake_courses = []
-        if "資工" in user['dept']: fake_courses = ["程式", "AI"]
-        if "食品" in user['dept']: fake_courses = ["食品", "安全"]
+        fake_courses = get_fake_courses(user['dept'])
         user_interest_tags = get_user_profile_tags(user['dept'], fake_courses, user.get('year', ''))
         recommended_df = calculate_recommendation(user_interest_tags, user['dept'], current_user_id, df_activities, user.get('year', ''))
 
@@ -924,22 +874,32 @@ else:
                 with st.spinner(f"🧠 正在以 AI 語意分析您的需求：「{search_keyword}」..."):
                     semantic_model = load_semantic_model()
                     query_embedding = semantic_model.encode(search_keyword, convert_to_tensor=True)
-                    activity_texts = tuple((recommended_df['title'] + " " + 
-                                    recommended_df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x))).tolist())
-                    corpus_embeddings = get_corpus_embeddings(semantic_model, activity_texts)
+                    activity_series = (recommended_df['title'].fillna('').astype(str) + " " +
+                                       recommended_df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x)))
+                    corpus_embeddings = get_corpus_embeddings(semantic_model, tuple(activity_series.tolist()))
                     cos_scores = util.cos_sim(query_embedding, corpus_embeddings)[0]
                     recommended_df['semantic_score'] = cos_scores.cpu().numpy()
-                    recommended_df = recommended_df[
-                        (recommended_df['semantic_score'] > 0.35) | 
-                        (recommended_df['title'].str.contains(search_keyword, case=False, na=False))
-                    ]
-                    recommended_df = recommended_df.sort_values(by=['semantic_score', 'score'], ascending=[False, False])
+
+                    # 混合檢索：
+                    # 1) 關鍵字命中 (標題或標籤包含所有輸入詞，字面比對不走 regex) 一律保留並排最前
+                    # 2) 純語意命中只取前 SEM_TOP_K 名且分數 ≥ SEM_MIN。
+                    #    text2vec 的相似度分布很擠 (亂打 "zzzz" 的中位數也有 ~0.38)，
+                    #    固定 0.35 門檻幾乎等於不篩選，所以改用「高門檻 + 名次上限」
+                    SEM_MIN, SEM_TOP_K = 0.45, 10
+                    terms = search_keyword.split()
+                    kw_hit = activity_series.apply(lambda s: all(t.lower() in s.lower() for t in terms))
+                    sem_rank = recommended_df['semantic_score'].rank(ascending=False, method='first')
+                    sem_hit = (recommended_df['semantic_score'] >= SEM_MIN) & (sem_rank <= SEM_TOP_K)
+                    recommended_df['kw_hit'] = kw_hit
+                    recommended_df = recommended_df[kw_hit | sem_hit]
+                    recommended_df = recommended_df.sort_values(by=['kw_hit', 'semantic_score', 'score'], ascending=[False, False, False])
                     for idx in recommended_df.index:
+                        tag = "🔎 關鍵字命中" if recommended_df.at[idx, 'kw_hit'] else "🕵️ AI 語意相關"
                         old_r = str(recommended_df.at[idx, 'match_reason'])
                         if old_r and old_r not in ["✨ 最新活動", "nan"]:
-                            recommended_df.at[idx, 'match_reason'] = f"🕵️ AI 語意精準命中 | {old_r}"
+                            recommended_df.at[idx, 'match_reason'] = f"{tag} | {old_r}"
                         else:
-                            recommended_df.at[idx, 'match_reason'] = "🕵️ AI 語意精準命中"
+                            recommended_df.at[idx, 'match_reason'] = tag
             
             if selected_category != "所有分類":
                 # 統一以 list 比對，確保分類篩選精確命中 tag 元素而非子字串
