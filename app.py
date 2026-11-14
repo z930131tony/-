@@ -18,12 +18,16 @@ from sentence_transformers import SentenceTransformer, util
 database.init_db()
 database.seed_mock_users()
 
+<<<<<<< Updated upstream
 # ==========================================
 # 1. 資料讀取層 (前後端解耦，實現 0 秒秒開極速體驗)
 # ==========================================
 @st.cache_resource(show_spinner="🧠 正在載入 AI 語意大腦，初次啟動請稍候...")
 def load_semantic_model():
     return SentenceTransformer('shibing624/text2vec-base-chinese')
+=======
+#資料讀取層 (Data Layer)
+>>>>>>> Stashed changes
 
 @st.cache_data(show_spinner=False)
 def get_corpus_embeddings(_model, texts_tuple):
@@ -812,6 +816,10 @@ def login_page():
                     else:
                         st.error("帳號或密碼錯誤。")
                 except ConnectionError:
+<<<<<<< Updated upstream
+=======
+                    #備援模式 (Fallback)：學校網站連不上時，檢查本地 SQLite
+>>>>>>> Stashed changes
                     st.warning("⚠️ 校務系統連線異常，已自動切換至本地備援驗證。")
                     user_info = database.verify_local_user(username, password)
                     if user_info:

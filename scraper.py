@@ -49,7 +49,11 @@ def scrape_stust_dept_aware(max_pages=2, progress_callback=None, step_offset=0, 
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
+<<<<<<< Updated upstream
     # 建立新聞網分類與代碼對應表
+=======
+
+>>>>>>> Stashed changes
     categories = {
         "所有訊息": "",      
         "學術活動": "0015",
@@ -343,7 +347,13 @@ def verify_stust_login(username, password):
 
 
 if __name__ == "__main__":
+<<<<<<< Updated upstream
     data = fetch_all_sources(max_pages=2)
+=======
+    
+    data = scrape_stust_dept_aware(max_pages=3)
+    
+>>>>>>> Stashed changes
     if data:
         df = pd.DataFrame(data)
         df.sort_values(by="date", ascending=False, inplace=True)
