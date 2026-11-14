@@ -764,6 +764,7 @@ def login_page():
                     else:
                         st.error("帳號或密碼錯誤。")
                 except ConnectionError:
+                    #備援模式 (Fallback)：學校網站連不上時，檢查本地 SQLite
                     st.warning("⚠️ 校務系統連線異常，已自動切換至本地備援驗證。")
                     user_info = database.verify_local_user(username, password)
                     if user_info:
