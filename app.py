@@ -17,8 +17,14 @@ import joblib
 from sentence_transformers import SentenceTransformer, util
 
 
-database.init_db()
-database.seed_mock_users()
+@st.cache_resource(show_spinner=False)
+def init_database():
+    """每個伺服器程序只建表與寫入測試帳號一次。
+    Streamlit 每位訪客、每次互動都會重跑整個 app.py，直接呼叫會在多人同時開啟時互相衝突。"""
+    database.init_db()
+    database.seed_mock_users()
+
+init_database()
 
 # ==========================================
 # 1. 資料讀取層 (前後端解耦，實現 0 秒秒開極速體驗)
