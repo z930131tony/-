@@ -78,8 +78,10 @@ def seed_mock_users():
             ("4B1G0177", hash_password("123"), "設計系", "大一", "范景程"),
             ("admin", hash_password("admin"), "全校", "教職員", "管理員")
         ]
+        # 多個使用者同時開啟 App 時，可能都看到空表而同時寫入；
+        # OR IGNORE 讓後到的寫入略過已存在的帳號，而不是丟出 IntegrityError
         cursor.executemany('''
-            INSERT INTO users (student_id, password, dept, year, name) 
+            INSERT OR IGNORE INTO users (student_id, password, dept, year, name)
             VALUES (?, ?, ?, ?, ?)
         ''', mock_users)
         conn.commit()
